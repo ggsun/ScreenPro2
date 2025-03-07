@@ -190,6 +190,7 @@ class GuideCounter:
         '''
         if self.cas_type == 'cas9':
             counts = {}
+            counts_one_mismatch = {}
 
             if self.library_type == "single_guide_design":
                 if get_recombinant:
@@ -215,7 +216,9 @@ class GuideCounter:
                 ],axis=1).fillna(0)
 
             elif self.library_type == "dual_guide_design":
-                if get_recombinant: recombinants = {}
+                if get_recombinant: 
+                    recombinants = {}
+                    recombinants_one_mismatch = {}
 
                 if protospacer_length == 'auto':
                     protospacer_A_length = self.library['protospacer_A'].str.len_bytes().unique().to_list()[0]
@@ -241,12 +244,19 @@ class GuideCounter:
                         verbose=verbose
                     )
                     counts[sample_id] = cnt['mapped']
+                    counts_one_mismatch[sample_id] = cnt['one_mismatch']
                     if get_recombinant:
                         recombinants[sample_id] = cnt['recombinant']
-                
+                        recombinants_one_mismatch[sample_id] = cnt['recombinant_one_mismatch']
+
                 counts_mat = pd.concat([
                     counts[sample_id].to_pandas().set_index('sgID_AB')['count'].rename(sample_id) 
                     for sample_id in counts.keys()
+                ],axis=1).fillna(0)
+
+                counts_one_mismatch_mat = pd.concat([
+                    counts_one_mismatch[sample_id].to_pandas().set_index('sgID_AB')['count'].rename(sample_id) 
+                    for sample_id in counts_one_mismatch.keys()
                 ],axis=1).fillna(0)
             
             else:
@@ -257,10 +267,12 @@ class GuideCounter:
             raise NotImplementedError("Cas12 count matrix is not yet implemented.")
         
         self.counts_dict = counts
+        self.counts_dict_one_mismatch = counts_one_mismatch
         self.counts_mat = counts_mat
+        self.counts_one_mismatch_mat = counts_one_mismatch_mat
         if get_recombinant:
             self.recombinants = recombinants
-    
+            self.recombinants_one_mismatch = recombinants_one_mismatch
     def load_counts_matrix(self, counts_mat_path, **kwargs):
         '''Load count matrix from file
         '''
