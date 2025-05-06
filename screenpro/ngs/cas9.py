@@ -175,7 +175,7 @@ def hamming_distance(seq1, seq2):
     return sum(1 for a, b in zip(seq1, seq2) if a != b)
 
 
-def map_to_library_dual_guide(df_count, library, get_recombinant=False, return_type='all', verbose=False):
+def map_to_library_dual_guide(df_count, library, get_recombinant=False, get_one_mismatch=False, return_type='all', verbose=False):
     """
     Map the counts of unique sequences to a library DataFrame containing dual-guide sgRNA sequences. 
     Optionally, the function can capture recombinant events.
@@ -185,6 +185,7 @@ def map_to_library_dual_guide(df_count, library, get_recombinant=False, return_t
         df_count (pandas.DataFrame): The input DataFrame containing the counts.
         library (pandas.DataFrame): The library of sequences to map against.
         get_recombinant (bool, optional): Whether to calculate recombinant events. Defaults to False.
+        get_one_mismatch (bool, optional): Whether to include guide sequences with one mismatch to the library. Defaults to False.
         return_type (str, optional): The type of reads to return. Can be 'unmapped', 'mapped', 'recombinant', or 'all'. Defaults to 'all'.
         verbose (bool, optional): Whether to print verbose output. Defaults to False.
 
@@ -200,45 +201,48 @@ def map_to_library_dual_guide(df_count, library, get_recombinant=False, return_t
     res = df_count.clone() #cheap deepcopy/clone
     res = res.rename(
         {'protospacer_a':'protospacer_A','protospacer_b':'protospacer_B'}
-    )
-    res = res.sort('count', descending=True)
-    res = res.with_columns(
-        pl.concat_str(
-            [
-                pl.col("protospacer_A"),
-                pl.col("protospacer_B")
-            ],
-            separator=";",
-        ).alias("sequence"),
-    )
-
-    # map to library
-    res_map = pl.DataFrame(library).join(
-            res, on="sequence", how="left"
         )
 
-    # get unmapped reads to the library
-    if get_recombinant or return_type == 'unmapped' or return_type == 'all':
-        res_unmap = res.join(
-            pl.DataFrame(library), on="sequence", how="anti"
+    if not get_one_mismatch:
+        res = res.sort('count', descending=True)
+        res = res.with_columns(
+            pl.concat_str(
+                [
+                    pl.col("protospacer_A"),
+                    pl.col("protospacer_B")
+                ],
+                separator=";",
+            ).alias("sequence"),
         )
 
-    # Hamming distance 1 mapping
-    res_mapped_mask = np.zeros(len(res), dtype=bool)
-    counts_one_mismatch = []
-    for _, _, _, protospacer_A, _, protospacer_B, _ in library.iter_rows():
-        count = 0
-        for i, (protospacer_A_res, protospacer_B_res, count_res, _) in enumerate(res.iter_rows()):
-            if hamming_distance(protospacer_A, protospacer_A_res) <= 1 and hamming_distance(protospacer_B, protospacer_B_res) <= 1:
-                count += count_res
-                res_mapped_mask[i] = True
-        counts_one_mismatch.append(count)
-    res_one_mismatch = pl.DataFrame(library)
-    res_one_mismatch = res_one_mismatch.with_columns(
-        pl.Series(name='count', values=counts_one_mismatch)
-    )
+        # map to library
+        res_map = pl.DataFrame(library).join(
+                res, on="sequence", how="left"
+            )
 
-    res_unmap_one_mismatch = res.filter(~res_mapped_mask)
+        # get unmapped reads to the library
+        if get_recombinant or return_type == 'unmapped' or return_type == 'all':
+            res_unmap = res.join(
+                pl.DataFrame(library), on="sequence", how="anti"
+            )
+    else:
+        # Hamming distance 1 mapping
+        res_mapped_mask = np.zeros(len(res), dtype=bool)
+        counts_one_mismatch = []
+        for _, _, _, protospacer_A, _, protospacer_B, _ in library.iter_rows():
+            count = 0
+            for i, (protospacer_A_res, protospacer_B_res, count_res, _) in enumerate(res.iter_rows()):
+                if hamming_distance(protospacer_A, protospacer_A_res) <= 1 and hamming_distance(protospacer_B, protospacer_B_res) <= 1:
+                    count += count_res
+                    res_mapped_mask[i] = True
+            counts_one_mismatch.append(count)
+        res = pl.DataFrame(library)
+        res = res.with_columns(
+            pl.Series(name='count', values=counts_one_mismatch)
+        )
+
+        res_map = res.filter(res_mapped_mask)
+        res_unmap = res.filter(~res_mapped_mask)
 
     if verbose:
         print("% mapped reads",
@@ -255,42 +259,44 @@ def map_to_library_dual_guide(df_count, library, get_recombinant=False, return_t
                 int(res.select(pl.sum("count")).to_pandas()['count'])
             )
         
-        sgRNA_table = pd.concat([
-            library.to_pandas()[['sgID_A','protospacer_A']].rename(columns={'sgID_A':'sgID','protospacer_A':'protospacer'}),
-            library.to_pandas()[['sgID_B', 'protospacer_B']].rename(columns={'sgID_B':'sgID','protospacer_B':'protospacer'})
-        ]).drop_duplicates(keep='first')
+        if not get_one_mismatch:
+            sgRNA_table = pd.concat([
+                library.to_pandas()[['sgID_A','protospacer_A']].rename(columns={'sgID_A':'sgID','protospacer_A':'protospacer'}),
+                library.to_pandas()[['sgID_B', 'protospacer_B']].rename(columns={'sgID_B':'sgID','protospacer_B':'protospacer'})
+            ]).drop_duplicates(keep='first')
 
-        res_unmap_remapped_a = res_unmap.join(
-            pl.DataFrame(sgRNA_table.rename(
-                columns={'protospacer':'protospacer_A','sgID':'sgID_A'})[['sgID_A','protospacer_A']]),
-            on=["protospacer_A"], how="left"
-        )
+            res_unmap_remapped_a = res_unmap.join(
+                pl.DataFrame(sgRNA_table.rename(
+                    columns={'protospacer':'protospacer_A','sgID':'sgID_A'})[['sgID_A','protospacer_A']]),
+                on=["protospacer_A"], how="left"
+            )
 
-        res_recomb_events = res_unmap_remapped_a.join(
-            pl.DataFrame(sgRNA_table.rename(
-                columns={'protospacer':'protospacer_B','sgID':'sgID_B'})[['sgID_B','protospacer_B']]),
-            on=["protospacer_B"], how="left"
-        )
+            res_recomb_events = res_unmap_remapped_a.join(
+                pl.DataFrame(sgRNA_table.rename(
+                    columns={'protospacer':'protospacer_B','sgID':'sgID_B'})[['sgID_B','protospacer_B']]),
+                on=["protospacer_B"], how="left"
+            )
 
-        sgID_A_list = []
-        sgID_B_list = []
+        if get_one_mismatch:
+            sgID_A_list = []
+            sgID_B_list = []
 
-        for protospacer_A_res, protospacer_B_res, count_res, _ in res_unmap_one_mismatch.iter_rows():
-            sgID_A = None
-            sgID_B = None
-            for _, row in sgRNA_table.iterrows():
-                if hamming_distance(protospacer_A_res, row['protospacer']) <= 1:
-                    sgID_A = row['sgID']
-                if hamming_distance(protospacer_B_res, row['protospacer']) <= 1:
-                    sgID_B = row['sgID']
+            for protospacer_A_res, protospacer_B_res, count_res, _ in res_unmap.iter_rows():
+                sgID_A = None
+                sgID_B = None
+                for _, row in sgRNA_table.iterrows():
+                    if hamming_distance(protospacer_A_res, row['protospacer']) <= 1:
+                        sgID_A = row['sgID']
+                    if hamming_distance(protospacer_B_res, row['protospacer']) <= 1:
+                        sgID_B = row['sgID']
 
-            sgID_A_list.append(sgID_A)
-            sgID_B_list.append(sgID_B)
+                sgID_A_list.append(sgID_A)
+                sgID_B_list.append(sgID_B)
 
-        res_recomb_events_one_mismatch = res_unmap_one_mismatch.with_columns(
-            pl.Series(name='sgID_A', values=sgID_A_list),
-            pl.Series(name='sgID_B', values=sgID_B_list)
-        )
+            res_recomb_events = res_unmap.with_columns(
+                pl.Series(name='sgID_A', values=sgID_A_list),
+                pl.Series(name='sgID_B', values=sgID_B_list)
+            )
 
         if verbose:
             print("% fully remapped recombination events",
@@ -311,8 +317,8 @@ def map_to_library_dual_guide(df_count, library, get_recombinant=False, return_t
             raise ValueError("get_recombinant must be set to True to calculate recombinant events")
     elif return_type == 'all':
         if get_recombinant:
-            return {'full': res, 'mapped': res_map, 'recombinant': res_recomb_events, 'unmapped': res_unmap, 'one_mismatch': res_one_mismatch, 'recombinant_one_mismatch': res_recomb_events_one_mismatch}
+            return {'full': res, 'mapped': res_map, 'recombinant': res_recomb_events, 'unmapped': res_unmap}
         else:
-            return {'full': res, 'mapped': res_map, 'unmapped': res_unmap, 'one_mismatch': res_one_mismatch}
+            return {'full': res, 'mapped': res_map, 'unmapped': res_unmap}
     else:
         raise ValueError("return_type must be either 'unmapped', 'mapped', 'recombinant', or 'all'")

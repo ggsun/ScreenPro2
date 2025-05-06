@@ -131,7 +131,7 @@ class GuideCounter:
         
         return out
     
-    def _process_cas9_dual_guide_sample(self, fastq_dir, sample_id, get_recombinant, trim_first_g, protospacer_A_length, protospacer_B_length, write, verbose=False):
+    def _process_cas9_dual_guide_sample(self, fastq_dir, sample_id, get_recombinant, get_one_mismatch, trim_first_g, protospacer_A_length, protospacer_B_length, write, verbose=False):
         if verbose: print(green(sample_id, ['bold']))
         get_counts = True
 
@@ -179,18 +179,18 @@ class GuideCounter:
             df_count=df_count,
             library=self.library,
             get_recombinant=get_recombinant,
+            get_one_mismatch=get_one_mismatch,
             return_type='all',
             verbose=verbose
         )
         
         return out        
 
-    def get_counts_matrix(self, fastq_dir, samples, get_recombinant=False, cas_type='cas9', protospacer_length='auto', trim_first_g=False, write=True, verbose=False):
+    def get_counts_matrix(self, fastq_dir, samples, get_recombinant=False, get_one_mismatch=False, cas_type='cas9', protospacer_length='auto', trim_first_g=False, write=True, verbose=False):
         '''Get count matrix for given samples
         '''
         if self.cas_type == 'cas9':
             counts = {}
-            counts_one_mismatch = {}
 
             if self.library_type == "single_guide_design":
                 if get_recombinant:
@@ -218,7 +218,6 @@ class GuideCounter:
             elif self.library_type == "dual_guide_design":
                 if get_recombinant: 
                     recombinants = {}
-                    recombinants_one_mismatch = {}
 
                 if protospacer_length == 'auto':
                     protospacer_A_length = self.library['protospacer_A'].str.len_bytes().unique().to_list()[0]
@@ -237,6 +236,7 @@ class GuideCounter:
                         fastq_dir=fastq_dir, 
                         sample_id=sample_id, 
                         get_recombinant=get_recombinant, 
+                        get_one_mismatch=get_one_mismatch,
                         trim_first_g=trim_first_g,
                         protospacer_A_length=protospacer_A_length,
                         protospacer_B_length=protospacer_B_length,
@@ -244,21 +244,14 @@ class GuideCounter:
                         verbose=verbose
                     )
                     counts[sample_id] = cnt['mapped']
-                    counts_one_mismatch[sample_id] = cnt['one_mismatch']
                     if get_recombinant:
                         recombinants[sample_id] = cnt['recombinant']
-                        recombinants_one_mismatch[sample_id] = cnt['recombinant_one_mismatch']
 
                 counts_mat = pd.concat([
                     counts[sample_id].to_pandas().set_index('sgID_AB')['count'].rename(sample_id) 
                     for sample_id in counts.keys()
                 ],axis=1).fillna(0)
 
-                counts_one_mismatch_mat = pd.concat([
-                    counts_one_mismatch[sample_id].to_pandas().set_index('sgID_AB')['count'].rename(sample_id) 
-                    for sample_id in counts_one_mismatch.keys()
-                ],axis=1).fillna(0)
-            
             else:
                 raise ValueError("Invalid library type. Please choose from 'single_guide_design' or 'dual_guide_design'.")
 
@@ -267,17 +260,15 @@ class GuideCounter:
             raise NotImplementedError("Cas12 count matrix is not yet implemented.")
         
         self.counts_dict = counts
-        self.counts_dict_one_mismatch = counts_one_mismatch
         self.counts_mat = counts_mat
-        self.counts_one_mismatch_mat = counts_one_mismatch_mat
         if get_recombinant:
             self.recombinants = recombinants
-            self.recombinants_one_mismatch = recombinants_one_mismatch
+
     def load_counts_matrix(self, counts_mat_path, **kwargs):
         '''Load count matrix from file
         '''
         self.counts_mat = pd.read_csv(counts_mat_path, **kwargs)
-    
+
     def _build_cas9_dual_guide_var_table(self, counts_table, source, ctrl_label='negative_control'):
         '''Build variant table for dual guide design
 
